@@ -1,0 +1,45 @@
+# Binaries
+*.exe
+*.out
+*.o
+
+# VS Code settings
+.vscode/
+
+# Logs
+*.log
+
+# Dependency directories
+vendor/
+
+# Environment variables
+.env
+
+# Compiled files
+*.pyc
+*.pyo
+*.class
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Go specific
+bin/
+pkg/
+*.test
+*.mod
+*.sum
+
+# IDE-specific
+.idea/
+*.iml
+
+# Database credentials (Modify as needed)
+database/config.yaml
+database/config.json
+database/config.toml
+database/config.ini
+
+# Redis dump files
+dump.rdb
