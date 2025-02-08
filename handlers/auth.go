@@ -4,21 +4,65 @@ import (
 	"CraftTanks/database"
 	"CraftTanks/models"
 	"CraftTanks/utils"
+	"os"
 	"time"
 
 	"log"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/golang-jwt/jwt/v4"
+	"github.com/joho/godotenv"
 )
 
-func generateToken(username string) (string, error) {
-	claims := jwt.MapClaims{
-		"username": username,
-		"exp":      time.Now().Add(time.Hour * 72).Unix(),
+const (
+	DefaultAccessTokenExp  = 900
+	DefaultRefreshTokenExp = 604800
+)
+
+func init() {
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatal("Error loading .env file")
 	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString([]byte("secret"))
+}
+
+func GenerateTokens(username string) (string, string, error) {
+
+	secret := os.Getenv("JWT_SECRET")
+	if secret == "" {
+		log.Fatal("Error loading .env file")
+	}
+
+	accessExp := utils.GetEnvAsInt("ACCESS_TOKEN_EXPIRES", DefaultAccessTokenExp)
+	refreshExp := utils.GetEnvAsInt("REFRESH_TOKEN_EXPIRES", DefaultRefreshTokenExp)
+
+	accessClaims := jwt.MapClaims{
+		"username": username,
+		"exp":      time.Now().Add(time.Second * time.Duration(accessExp)).Unix(),
+	}
+
+	accessToken := jwt.NewWithClaims(jwt.SigningMethodHS256, accessClaims)
+	accessTokenString, err := accessToken.SignedString([]byte(secret))
+	if err != nil {
+		return "", "", err
+	}
+
+	refreshClaims := jwt.MapClaims{
+		"username": username,
+		"exp":      time.Now().Add(time.Second * time.Duration(refreshExp)).Unix(),
+	}
+	refreshToken := jwt.NewWithClaims(jwt.SigningMethodHS256, refreshClaims)
+	refreshTokenString, err := refreshToken.SignedString([]byte(secret))
+	if err != nil {
+		return "", "", err
+	}
+
+	err = database.RedisClient.Set(database.Ctx, username, refreshTokenString, time.Second*time.Duration(refreshExp)).Err()
+	if err != nil {
+		return "", "", err
+	}
+
+	return accessTokenString, refreshTokenString, nil
 }
 
 func Register(c *fiber.Ctx) error {
@@ -52,13 +96,61 @@ func Login(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid credentials"})
 	}
 
-	// Check hashed password
 	if !utils.CheckPassword(user.Password, input.Password) {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid credentials"})
 	}
 
-	token, _ := generateToken(user.Username)
-	return c.JSON(fiber.Map{"token": token})
+	accessToken, refreshToken, err := GenerateTokens(user.Username)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Token generation failed"})
+	}
+
+	return c.JSON(fiber.Map{
+		"access_token":  accessToken,
+		"refresh_token": refreshToken,
+	})
+}
+
+func Refresh(c *fiber.Ctx) error {
+	type RefreshRequest struct {
+		RefreshToken string `json:"refresh_token"`
+	}
+
+	var request RefreshRequest
+	if err := c.BodyParser(&request); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request"})
+	}
+
+	token, err := jwt.Parse(request.RefreshToken, func(token *jwt.Token) (interface{}, error) {
+		return []byte("secret"), nil
+	})
+	if err != nil || !token.Valid {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid refresh token"})
+	}
+
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid token claims"})
+	}
+
+	username := claims["username"].(string)
+
+	// Verify refresh token from Redis
+	storedToken, err := database.RedisClient.Get(database.Ctx, username).Result()
+	if err != nil || storedToken != request.RefreshToken {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid or expired refresh token"})
+	}
+
+	// Generate new access and refresh tokens
+	accessToken, newRefreshToken, err := GenerateTokens(username)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Token generation failed"})
+	}
+
+	return c.JSON(fiber.Map{
+		"access_token":  accessToken,
+		"refresh_token": newRefreshToken,
+	})
 }
 
 func GetUsers(c *fiber.Ctx) error {

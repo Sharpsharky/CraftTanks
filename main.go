@@ -18,10 +18,6 @@ func main() {
 	app.Use(logger.New())
 	app.Use(cors.New())
 
-	app.Get("/routes", func(c *fiber.Ctx) error {
-		return c.JSON(app.Stack())
-	})
-
 	routes.SetupRoutes(app)
 
 	log.Fatal(app.Listen(":3000"))
