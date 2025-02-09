@@ -3,6 +3,7 @@ package main
 import (
 	"CraftTanks/database"
 	"CraftTanks/routes"
+	"CraftTanks/utils"
 	"log"
 
 	"github.com/gofiber/fiber/v2"
@@ -11,12 +12,15 @@ import (
 )
 
 func main() {
+	utils.LoadEnv()
+
 	database.InitDB()
 	database.InitRedis()
 
 	app := fiber.New()
 	app.Use(logger.New())
 	app.Use(cors.New())
+	//app.Use(handlers.SessionMiddleware())
 
 	routes.SetupRoutes(app)
 

@@ -105,10 +105,66 @@ func Login(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Token generation failed"})
 	}
 
+	err = database.SetSession(user.Username, refreshToken)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Could not store session"})
+	}
+
+	database.TrackActiveUser(user.Username)
+
 	return c.JSON(fiber.Map{
 		"access_token":  accessToken,
 		"refresh_token": refreshToken,
 	})
+}
+
+func Logout(c *fiber.Ctx) error {
+	userID := c.Locals("username").(string)
+
+	err := database.DeleteSession(userID)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Could not remove session"})
+	}
+
+	database.RemoveActiveUser(userID)
+
+	return c.JSON(fiber.Map{"message": "Logout successful"})
+}
+
+func SessionMiddleware() fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		token := c.Get("Authorization")
+		if token == "" {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "No token provided"})
+		}
+
+		claims := jwt.MapClaims{}
+		_, err := jwt.ParseWithClaims(token, claims, func(token *jwt.Token) (interface{}, error) {
+			return []byte("secret"), nil
+		})
+		if err != nil {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid token"})
+		}
+
+		username := claims["username"].(string)
+
+		storedToken, err := database.GetSession(username)
+		if err != nil || storedToken != token {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Session expired or invalid"})
+		}
+
+		c.Locals("username", username)
+
+		return c.Next()
+	}
+}
+
+func GetActiveUsers(c *fiber.Ctx) error {
+	users, err := database.GetActiveUsers()
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Could not retrieve active users"})
+	}
+	return c.JSON(fiber.Map{"active_users": users})
 }
 
 func Refresh(c *fiber.Ctx) error {
